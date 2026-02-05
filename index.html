@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Stroop Task (Web)</title>
+  <style>
+    :root { --bg:#0b0f14; --fg:#e8eef7; --muted:#9fb0c3; --card:#101826; --accent:#5fb3ff; --bad:#ff6b6b; --good:#51cf66; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--fg); }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 24px; }
+    .card { background: var(--card); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: .2px; }
+    p { color: var(--muted); line-height: 1.5; margin: 10px 0; }
+    .row { display:flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; }
+    .row > * { flex: 1 1 220px; }
+    label { display:block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input, select { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); color: var(--fg); }
+    button { cursor:pointer; border: 0; border-radius: 14px; padding: 11px 14px; background: var(--accent); color:#06101c; font-weight: 700; }
+    button.secondary { background: rgba(255,255,255,.08); color: var(--fg); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .task { margin-top: 18px; min-height: 360px; display:flex; align-items:center; justify-content:center; position: relative; overflow: hidden; border-radius: 16px; border: 1px solid rgba(255,255,255,.08); background: radial-gradient(1000px 500px at 50% -10%, rgba(95,179,255,.18), transparent 50%), rgba(255,255,255,.03); }
+    .stim { font-size: 72px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase; user-select:none; }
+    .fix { font-size: 48px; color: rgba(255,255,255,.55); user-select:none; }
+    .hud { position:absolute; top: 12px; left: 12px; right: 12px; display:flex; justify-content:space-between; color: rgba(255,255,255,.7); font-size: 13px; }
+    .kbd { display:flex; gap: 8px; align-items:center; }
+    .pill { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.05); }
+    .pill strong { color: var(--fg); }
+    .feedback { position:absolute; bottom: 12px; left: 12px; right: 12px; text-align:center; font-weight: 700; }
+    .good { color: var(--good); }
+    .bad { color: var(--bad); }
+    .hidden { display:none !important; }
+    .small { font-size: 12px; color: var(--muted); }
+    a { color: var(--accent); text-decoration: none; }
+    code { background: rgba(255,255,255,.06); padding: 2px 6px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Stroop Task (Color-Word Interference)</h1>
+      <p>
+        Respond to the <strong>INK COLOR</strong>, not the word meaning.
+        Keys: <code>R</code>=Red, <code>G</code>=Green, <code>B</code>=Blue, <code>Y</code>=Yellow.
+      </p>
+
+      <div class="row">
+        <div>
+          <label>Participant ID (optional)</label>
+          <input id="pid" placeholder="e.g., P001" />
+        </div>
+        <div>
+          <label>Trials</label>
+          <input id="trials" type="number" min="10" max="400" value="96" />
+        </div>
+        <div>
+          <label>Practice trials</label>
+          <input id="practice" type="number" min="0" max="50" value="12" />
+        </div>
+        <div>
+          <label>Mode</label>
+          <select id="mode">
+            <option value="standard">Standard</option>
+            <option value="demoStress">“Stress demo” (time pressure + feedback)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="startBtn">Start</button>
+        <button id="downloadBtn" class="secondary" disabled>Download CSV</button>
+        <button id="resetBtn" class="secondary" disabled>Reset</button>
+      </div>
+
+      <p class="small">
+        Tip: For a cleaner lab-like look, run this page fullscreen (F11). If embedding, keep the <code>.task</code> container.
+      </p>
+    </div>
+
+    <div class="task" id="taskArea" aria-live="polite" aria-label="Stroop task display">
+      <div class="hud">
+        <div class="pill">Block: <strong id="blockLabel">—</strong></div>
+        <div class="kbd pill">Keys: <strong>R</strong> <strong>G</strong> <strong>B</strong> <strong>Y</strong></div>
+        <div class="pill">Trial: <strong id="trialLabel">—</strong></div>
+      </div>
+
+      <div id="display" class="fix">+</div>
+      <div id="fb" class="feedback hidden"></div>
+    </div>
+
+    <div class="card" style="margin-top:18px;">
+      <h1>Results</h1>
+      <p id="summary" class="small">Run the task to see a summary.</p>
+      <div id="details" class="small"></div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ---------- Config ----------
+  const COLORS = [
+    { name: "RED",    css: "#ff4d4d", key: "r" },
+    { name: "GREEN",  css: "#51cf66", key: "g" },
+    { name: "BLUE",   css: "#4dabf7", key: "b" },
+    { name: "YELLOW", css: "#ffd43b", key: "y" },
+  ];
+  const WORDS = COLORS.map(c => c.name);
+
+  // Timing (ms)
+  const TIMING = {
+    standard: {
+      fixation: 500,
+      stimulusMax: 2500,  // max response window
+      iti: 300,
+      feedbackMs: 400,
+    },
+    demoStress: {
+      fixation: 350,
+      stimulusMax: 1200,  // tighter window
+      iti: 250,
+      feedbackMs: 450,
+    }
+  };
+
+  // Proportions for trial types in main task
+  // (congruent + incongruent + neutral = 1.0)
+  const TYPE_WEIGHTS = { congruent: 0.33, incongruent: 0.50, neutral: 0.17 };
+
+  // Neutral stimulus uses "XXXX" (or you can swap to unrelated words)
+  const NEUTRAL_WORD = "XXXX";
+
+  // Optional beep on errors (stress demo)
+  const ENABLE_ERROR_BEEP = true;
+
+  // ---------- DOM ----------
+  const startBtn = document.getElementById("startBtn");
+  const downloadBtn = document.getElementById("downloadBtn");
+  const resetBtn = document.getElementById("resetBtn");
+
+  const pidEl = document.getElementById("pid");
+  const trialsEl = document.getElementById("trials");
+  const practiceEl = document.getElementById("practice");
+  const modeEl = document.getElementById("mode");
+
+  const taskArea = document.getElementById("taskArea");
+  const display = document.getElementById("display");
+  const fb = document.getElementById("fb");
+
+  const blockLabel = document.getElementById("blockLabel");
+  const trialLabel = document.getElementById("trialLabel");
+
+  const summary = document.getElementById("summary");
+  const details = document.getElementById("details");
+
+  // ---------- State ----------
+  let running = false;
+  let awaitingResponse = false;
+  let currentTrial = null;
+  let trialIndex = 0;
+  let block = "—";
+  let timerHandle = null;
+  let stimDeadlineHandle = null;
+
+  /** @type {Array<Object>} */
+  let data = [];
+
+  // ---------- Utilities ----------
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function weightedChoice(weightsObj) {
+    const entries = Object.entries(weightsObj);
+    const total = entries.reduce((s, [,w]) => s + w, 0);
+    let r = Math.random() * total;
+    for (const [k,w] of entries) {
+      if ((r -= w) <= 0) return k;
+    }
+    return entries[entries.length - 1][0];
+  }
+
+  function nowMs() { return performance.now(); }
+
+  function clearTimers() {
+    if (timerHandle) { clearTimeout(timerHandle); timerHandle = null; }
+    if (stimDeadlineHandle) { clearTimeout(stimDeadlineHandle); stimDeadlineHandle = null; }
+  }
+
+  function setFixation() {
+    display.className = "fix";
+    display.textContent = "+";
+    display.style.color = "rgba(255,255,255,.55)";
+  }
+
+  function setStimulus(word, colorCss) {
+    display.className = "stim";
+    display.textContent = word;
+    display.style.color = colorCss;
+  }
+
+  function setFeedback(text, ok) {
+    fb.textContent = text;
+    fb.classList.remove("hidden", "good", "bad");
+    fb.classList.add(ok ? "good" : "bad");
+  }
+
+  function hideFeedback() {
+    fb.classList.add("hidden");
+  }
+
+  function beep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = 440;
+      g.gain.value = 0.08;
+      o.connect(g); g.connect(ctx.destination);
+      o.start();
+      setTimeout(() => { o.stop(); ctx.close(); }, 120);
+    } catch (_) { /* ignore */ }
+  }
+
+  function computeSummary(rows) {
+    // Filter to main trials only for primary summary
+    const main = rows.filter(r => r.block === "main");
+    const byType = (t) => main.filter(r => r.trial_type === t);
+    const mean = (xs) => xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : NaN;
+    const acc = (xs) => xs.length ? xs.filter(r=>r.correct===1).length / xs.length : NaN;
+
+    const rtCorrect = (xs) => xs.filter(r=>r.correct===1 && Number.isFinite(r.rt_ms)).map(r=>r.rt_ms);
+
+    const congr = byType("congruent");
+    const incon = byType("incongruent");
+    const neut = byType("neutral");
+
+    const mCong = mean(rtCorrect(congr));
+    const mIncon = mean(rtCorrect(incon));
+    const mNeut = mean(rtCorrect(neut));
+
+    const stroopEffect = (Number.isFinite(mIncon) && Number.isFinite(mCong)) ? (mIncon - mCong) : NaN;
+
+    return {
+      n_main: main.length,
+      acc_main: acc(main),
+      rt_main: mean(rtCorrect(main)),
+      acc_congruent: acc(congr),
+      acc_incongruent: acc(incon),
+      acc_neutral: acc(neut),
+      rt_congruent: mCong,
+      rt_incongruent: mIncon,
+      rt_neutral: mNeut,
+      stroop_effect_ms: stroopEffect,
+    };
+  }
+
+  function fmt(n, digits=0) {
+    return Number.isFinite(n) ? n.toFixed(digits) : "—";
+  }
+
+  function toCSV(rows) {
+    const cols = [
+      "timestamp_iso","participant_id","mode","block","trial_number","trial_type",
+      "word","ink_color","correct_key","response_key","correct","rt_ms","timeout"
+    ];
+    const esc = (v) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replaceAll('"','""')}"` : s;
+    };
+    const lines = [cols.join(",")];
+    for (const r of rows) {
+      lines.push(cols.map(c => esc(r[c])).join(","));
+    }
+    return lines.join("\n");
+  }
+
+  function downloadText(filename, text) {
+    const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // ---------- Trial generation ----------
+  function makeTrial(trial_type) {
+    const ink = COLORS[Math.floor(Math.random() * COLORS.length)];
+    let word = ink.name;
+
+    if (trial_type === "neutral") {
+      word = NEUTRAL_WORD;
+    } else if (trial_type === "incongruent") {
+      const otherWords = WORDS.filter(w => w !== ink.name);
+      word = otherWords[Math.floor(Math.random() * otherWords.length)];
+    } // congruent uses matching word
+
+    return {
+      trial_type,
+      word,
+      ink_color: ink.name,
+      ink_css: ink.css,
+      correct_key: ink.key,
+    };
+  }
+
+  function buildTrials(n, isPractice=false) {
+    const trials = [];
+    for (let i = 0; i < n; i++) {
+      const t = isPractice ? weightedChoice({ congruent: 0.40, incongruent: 0.45, neutral: 0.15 })
+                           : weightedChoice(TYPE_WEIGHTS);
+      trials.push(makeTrial(t));
+    }
+    return trials;
+  }
+
+  // ---------- Task runner ----------
+  let practiceTrials = [];
+  let mainTrials = [];
+  let allTrials = [];
+
+  function lockUI(locked) {
+    startBtn.disabled = locked;
+    trialsEl.disabled = locked;
+    practiceEl.disabled = locked;
+    modeEl.disabled = locked;
+    pidEl.disabled = locked;
+    resetBtn.disabled = !locked;
+  }
+
+  function updateHUD() {
+    blockLabel.textContent = block;
+    trialLabel.textContent = `${trialIndex + 1} / ${allTrials.length}`;
+  }
+
+  function endTask() {
+    running = false;
+    awaitingResponse = false;
+    clearTimers();
+    lockUI(false);
+    downloadBtn.disabled = data.length === 0;
+
+    setFixation();
+    hideFeedback();
+
+    const s = computeSummary(data);
+    const pid = (pidEl.value || "").trim() || "—";
+    summary.innerHTML = `
+      Participant: <strong>${pid}</strong><br/>
+      Main trials: <strong>${s.n_main}</strong><br/>
+      Accuracy (main): <strong>${fmt(100*s.acc_main,1)}%</strong><br/>
+      Mean RT correct (main): <strong>${fmt(s.rt_main,0)} ms</strong><br/>
+      Stroop effect (Incongruent − Congruent): <strong>${fmt(s.stroop_effect_ms,0)} ms</strong>
+    `;
+
+    details.innerHTML = `
+      <div style="margin-top:10px;">
+        <strong>By condition (correct RTs):</strong><br/>
+        Congruent: ${fmt(s.rt_congruent,0)} ms | Acc ${fmt(100*s.acc_congruent,1)}%<br/>
+        Incongruent: ${fmt(s.rt_incongruent,0)} ms | Acc ${fmt(100*s.acc_incongruent,1)}%<br/>
+        Neutral: ${fmt(s.rt_neutral,0)} ms | Acc ${fmt(100*s.acc_neutral,1)}%
+      </div>
+    `;
+  }
+
+  function recordResponse({ key, rt, timeout }) {
+    const correct = (!timeout && key === currentTrial.correct_key) ? 1 : 0;
+
+    data.push({
+      timestamp_iso: new Date().toISOString(),
+      participant_id: (pidEl.value || "").trim(),
+      mode: modeEl.value,
+      block: block,
+      trial_number: trialIndex + 1,
+      trial_type: currentTrial.trial_type,
+      word: currentTrial.word,
+      ink_color: currentTrial.ink_color,
+      correct_key: currentTrial.correct_key,
+      response_key: timeout ? "" : key,
+      correct: correct,
+      rt_ms: timeout ? "" : Math.round(rt),
+      timeout: timeout ? 1 : 0,
+    });
+
+    // Feedback (optional)
+    if (modeEl.value === "demoStress") {
+      if (timeout) {
+        setFeedback("TOO SLOW", false);
+        if (ENABLE_ERROR_BEEP) beep();
+      } else if (correct) {
+        setFeedback("✓", true);
+      } else {
+        setFeedback("✕", false);
+        if (ENABLE_ERROR_BEEP) beep();
+      }
+      timerHandle = setTimeout(() => hideFeedback(), TIMING.demoStress.feedbackMs);
+    } else {
+      hideFeedback();
+    }
+  }
+
+  function nextTrial() {
+    if (!running) return;
+    clearTimers();
+
+    if (trialIndex >= allTrials.length) {
+      endTask();
+      return;
+    }
+
+    // Determine block label for HUD/data
+    block = (trialIndex < practiceTrials.length) ? "practice" : "main";
+    updateHUD();
+
+    currentTrial = allTrials[trialIndex];
+    awaitingResponse = false;
+
+    // Fixation
+    setFixation();
+    hideFeedback();
+
+    const tcfg = TIMING[modeEl.value];
+
+    timerHandle = setTimeout(() => {
+      // Stimulus on
+      setStimulus(currentTrial.word, currentTrial.ink_css);
+      const tStart = nowMs();
+      awaitingResponse = true;
+
+      // Timeout / deadline
+      stimDeadlineHandle = setTimeout(() => {
+        if (!awaitingResponse) return;
+        awaitingResponse = false;
+        recordResponse({ key: "", rt: NaN, timeout: true });
+
+        // ITI then advance
+        timerHandle = setTimeout(() => {
+          trialIndex++;
+          nextTrial();
+        }, tcfg.iti);
+      }, tcfg.stimulusMax);
+
+      // Store start time on trial object for RT calc
+      currentTrial._tStart = tStart;
+    }, tcfg.fixation);
+  }
+
+  function handleKeydown(e) {
+    if (!running || !awaitingResponse) return;
+
+    const k = (e.key || "").toLowerCase();
+    const valid = new Set(COLORS.map(c => c.key));
+    if (!valid.has(k)) return;
+
+    awaitingResponse = false;
+    clearTimeout(stimDeadlineHandle);
+
+    const rt = nowMs() - currentTrial._tStart;
+    recordResponse({ key: k, rt, timeout: false });
+
+    const tcfg = TIMING[modeEl.value];
+    timerHandle = setTimeout(() => {
+      trialIndex++;
+      nextTrial();
+    }, tcfg.iti);
+  }
+
+  function startTask() {
+    if (running) return;
+
+    // Basic input guardrails
+    const nTrials = Math.max(10, Math.min(400, parseInt(trialsEl.value, 10) || 96));
+    const nPractice = Math.max(0, Math.min(50, parseInt(practiceEl.value, 10) || 0));
+
+    trialsEl.value = nTrials;
+    practiceEl.value = nPractice;
+
+    data = [];
+    trialIndex = 0;
+
+    practiceTrials = buildTrials(nPractice, true);
+    mainTrials = buildTrials(nTrials, false);
+    allTrials = practiceTrials.concat(mainTrials);
+
+    running = true;
+    lockUI(true);
+    downloadBtn.disabled = true;
+
+    summary.textContent = "Task running… respond to ink color (R/G/B/Y).";
+    details.textContent = "";
+
+    nextTrial();
+  }
+
+  function resetTask() {
+    running = false;
+    awaitingResponse = false;
+    clearTimers();
+    data = [];
+    trialIndex = 0;
+    currentTrial = null;
+
+    lockUI(false);
+    downloadBtn.disabled = true;
+
+    blockLabel.textContent = "—";
+    trialLabel.textContent = "—";
+    setFixation();
+    hideFeedback();
+
+    summary.textContent = "Run the task to see a summary.";
+    details.textContent = "";
+  }
+
+  // ---------- Wire up ----------
+  startBtn.addEventListener("click", startTask);
+  resetBtn.addEventListener("click", resetTask);
+  downloadBtn.addEventListener("click", () => {
+    const pid = (pidEl.value || "").trim() || "anon";
+    const fname = `stroop_${pid}_${new Date().toISOString().replaceAll(":","-")}.csv`;
+    downloadText(fname, toCSV(data));
+  });
+
+  window.addEventListener("keydown", handleKeydown);
+
+  // Enable download after task ends (or if user ran already)
+  const observer = new MutationObserver(() => {
+    downloadBtn.disabled = data.length === 0;
+  });
+  observer.observe(summary, { childList: true, subtree: true });
+
+  resetTask();
+})();
+</script>
+</body>
+</html>
